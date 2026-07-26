@@ -69,6 +69,10 @@ reads `engine: css transforms` — that's the honest default, not a downgrade.
 | type in the live card | rename it in real time |
 | the `spawn` button | add a fresh card to the sim |
 
+On mobile the cards scale down to fit the viewport (their physics bodies scale
+to match), re-laying out on orientation change; drag/throw and double-tap flip
+are touch-first, and the HUD stays compact.
+
 ## Stack
 
 - Vite + vanilla TypeScript (no framework)

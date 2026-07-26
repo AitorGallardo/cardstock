@@ -6,6 +6,9 @@ import { CanvasMirror } from './canvasMirror';
 
 const { Engine, Bodies, Body, Composite, Constraint, Common } = Matter;
 
+// A phone is a narrow (portrait) OR short (landscape) viewport.
+const PHONE_MQ = '(max-width: 560px), (max-height: 480px)';
+
 // ------------------------------------------------------------------ setup ---
 const scene = document.getElementById('scene') as HTMLElement;
 const hud = document.getElementById('hud') as HTMLElement;
@@ -88,11 +91,18 @@ function spawnBody(el: HTMLElement, x: number, y: number, drift = true) {
   return card;
 }
 
-// Build the seven content cards, spread out.
+// Choose a column count that keeps every card fully on-screen for the current
+// viewport (2 on a phone, more as it gets wider / shorter in landscape).
+function gridCols(): number {
+  const w = window.innerWidth;
+  if (w < 520) return 2;
+  if (w < 1000) return 3;
+  return 4;
+}
+
+// Build the seven content cards, then lay them out in a viewport-fitting grid.
 function initCards() {
-  const cols = window.innerWidth < 720 ? 2 : 3;
-  const cw = window.innerWidth / cols;
-  CARDS.forEach((def, i) => {
+  CARDS.forEach((def) => {
     const el = buildCard(def, (spawned) => {
       // Spawn from a point near the live card, with a little pop.
       const from = cards.find((c) => c.el.dataset.cardId === 'live');
@@ -102,11 +112,33 @@ function initCards() {
       Body.setVelocity(c.body, { x: Common.random(-4, 4), y: -7 });
       Body.setAngularVelocity(c.body, Common.random(-0.05, 0.05));
     });
+    // temporary spawn point; layoutCards() places them properly below
+    spawnBody(el, window.innerWidth / 2, window.innerHeight / 2, false);
+  });
+  layoutCards();
+}
+
+// Distribute the initial cards across a grid sized to the viewport, so they
+// always start fully visible (portrait AND short landscape).
+function layoutCards() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const n = cards.length;
+  const cols = gridCols();
+  const rows = Math.max(1, Math.ceil(n / cols));
+  const cellW = w / cols;
+  const cellH = h / rows;
+  cards.forEach((c, i) => {
     const col = i % cols;
-    const rowN = Math.floor(i / cols);
-    const x = cw * col + cw / 2 + Common.random(-30, 30);
-    const y = 150 + rowN * 175 + Common.random(-20, 20);
-    spawnBody(el, x, y);
+    const row = Math.floor(i / cols);
+    // clamp so even with jitter the whole card stays inside its cell / the view
+    const jx = Math.min(cellW / 2 - c.w / 2, 16);
+    const jy = Math.min(cellH / 2 - c.h / 2, 14);
+    const x = cellW * col + cellW / 2 + (jx > 0 ? Common.random(-jx, jx) : 0);
+    const y = cellH * row + cellH / 2 + (jy > 0 ? Common.random(-jy, jy) : 0);
+    Body.setPosition(c.body, { x, y });
+    Body.setVelocity(c.body, { x: Common.random(-1.3, 1.3), y: Common.random(-1, 1) });
+    Body.setAngularVelocity(c.body, Common.random(-0.02, 0.02));
   });
 }
 
@@ -171,15 +203,34 @@ window.addEventListener(
   { passive: false },
 );
 
+// double-tap (touch) / double-click (mouse) flip detection, pointer-based so it
+// works reliably on iOS where a native dblclick is flaky under user-scalable=no.
+let lastTap = { t: 0, x: 0, y: 0, el: null as HTMLElement | null };
+
 function endDrag(e: PointerEvent) {
   if (!drag || e.pointerId !== drag.pointerId) return;
-  if (drag.active) {
+  const wasDrag = drag.active;
+  const card = drag.card;
+  if (wasDrag) {
     Composite.remove(world, drag.constraint);
-    drag.card.grabbed = false;
-    drag.card.el.classList.remove('lifted');
-    clampVelocity(drag.card.body, 26);
+    card.grabbed = false;
+    card.el.classList.remove('lifted');
+    clampVelocity(card.body, 26);
   }
   drag = null;
+  if (e.type === 'pointercancel' || wasDrag) return;
+
+  // A clean tap (not a drag). Treat two quick taps on the same card as a flip.
+  const t = e.target as HTMLElement;
+  if (t.closest('a, button, input')) return; // don't flip while using controls/links
+  const now = performance.now();
+  const near = Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 28;
+  if (lastTap.el === card.el && now - lastTap.t < 320 && near) {
+    card.el.classList.toggle('flipped');
+    lastTap = { t: 0, x: 0, y: 0, el: null }; // reset so a third tap starts fresh
+  } else {
+    lastTap = { t: now, x: e.clientX, y: e.clientY, el: card.el };
+  }
 }
 window.addEventListener('pointerup', endDrag);
 window.addEventListener('pointercancel', endDrag);
@@ -190,13 +241,8 @@ function clampVelocity(body: Matter.Body, max: number) {
   if (s > max) Body.setVelocity(body, { x: (v.x / s) * max, y: (v.y / s) * max });
 }
 
-// ------------------------------------------------------------------- flip ---
-scene.addEventListener('dblclick', (e) => {
-  const t = e.target as HTMLElement;
-  if (t.closest('a, button, input')) return; // don't flip while using controls
-  const el = t.closest('.card') as HTMLElement | null;
-  if (el) el.classList.toggle('flipped');
-});
+// (flip is handled by the pointer-based double-tap detector in endDrag above,
+//  which works for both mouse double-click and touch double-tap)
 
 // ---------------------------------------------------------------- gravity ---
 let gravityOn = false;
@@ -204,7 +250,14 @@ function setGravity(on: boolean) {
   gravityOn = on;
   engine.gravity.y = on ? 1 : 0;
   hud.classList.toggle('gravity-on', on);
-  gravityToggle.textContent = on ? 'g gravity: on' : 'g toggles gravity';
+  const narrow = window.matchMedia(PHONE_MQ).matches;
+  gravityToggle.textContent = on
+    ? narrow
+      ? 'gravity: on'
+      : 'g gravity: on'
+    : narrow
+      ? 'gravity: off'
+      : 'g toggles gravity';
   if (on) {
     // a small nudge so everything wakes up and falls
     for (const c of cards) Body.applyForce(c.body, c.body.position, { x: 0, y: 0.0006 * c.body.mass });
@@ -285,10 +338,55 @@ if (support.supported && !mirror.active) {
   engineLineEl.textContent = 'css transforms (drawElement present, mirror off)';
 }
 
+// When the viewport changes (e.g. an orientation flip crosses a CSS breakpoint),
+// the card DOM is re-sized by media queries — so the matter-js bodies must be
+// rescaled to keep tracking the real element box, then nudged back on-screen.
+function resyncCardBodies() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  for (const c of cards) {
+    // offsetWidth/Height give the untransformed CSS box (ignores the physics rotate/scale)
+    const nw = c.el.offsetWidth || c.w;
+    const nh = c.el.offsetHeight || c.h;
+    if (Math.abs(nw - c.w) > 0.5 || Math.abs(nh - c.h) > 0.5) {
+      Body.scale(c.body, nw / c.w, nh / c.h);
+      c.w = nw;
+      c.h = nh;
+    }
+    // keep the card inside the fresh viewport bounds
+    const hw = c.w / 2;
+    const hh = c.h / 2;
+    const x = Math.max(hw, Math.min(w - hw, c.body.position.x));
+    const y = Math.max(hh, Math.min(h - hh, c.body.position.y));
+    if (x !== c.body.position.x || y !== c.body.position.y) Body.setPosition(c.body, { x, y });
+  }
+}
+
+let wasPortrait = window.innerHeight >= window.innerWidth;
 window.addEventListener('resize', () => {
   buildWalls();
+  resyncCardBodies();
+  // On an orientation flip the whole grid geometry changes, so redistribute the
+  // cards to a fresh viewport-fitting layout instead of leaving them clamped in a pile.
+  const portrait = window.innerHeight >= window.innerWidth;
+  if (portrait !== wasPortrait) {
+    wasPortrait = portrait;
+    layoutCards();
+  }
   mirror.resize();
 });
+
+// Shorten the HUD hint on narrow screens so it doesn't wrap awkwardly.
+const hudHint = document.getElementById('hud-hint');
+function applyHudHint() {
+  if (!hudHint) return;
+  hudHint.innerHTML = window.matchMedia(PHONE_MQ).matches
+    ? 'drag · throw · 2-tap flips · '
+    : 'drag&nbsp;·&nbsp;throw&nbsp;·&nbsp;double-tap flips&nbsp;·&nbsp;';
+}
+applyHudHint();
+window.addEventListener('resize', applyHudHint);
+setGravity(false); // normalise the toggle label for the current viewport width
 
 requestAnimationFrame(frame);
 

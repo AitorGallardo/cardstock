@@ -149,8 +149,10 @@ function buildLiveControls(card: HTMLElement, onSpawn: (el: HTMLElement) => void
   input.placeholder = 'rename this card…';
   input.setAttribute('aria-label', 'rename this card');
 
-  const titleEl = card.querySelector<HTMLElement>('.js-title');
+  // Query the title lazily: at build time `card` isn't fully assembled yet, so
+  // capturing it here would be null and the rename would silently do nothing.
   input.addEventListener('input', () => {
+    const titleEl = card.querySelector<HTMLElement>('.js-title');
     if (titleEl) titleEl.textContent = input.value.trim() || 'live DOM';
   });
   // Keep clicks/typing from starting a drag.
