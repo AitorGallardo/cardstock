@@ -3,6 +3,11 @@ import Matter from 'matter-js';
 import { CARDS, buildCard } from './cards';
 import { detectHtmlInCanvas, engineLabel } from './htmlCanvas';
 import { CanvasMirror } from './canvasMirror';
+import { installErrorReporter, reportError } from './diag';
+
+// Wire the on-page error reporter before anything else can throw, so any
+// failure during boot surfaces as a visible line instead of a blank scene.
+installErrorReporter();
 
 const { Engine, Bodies, Body, Composite, Constraint, Common } = Matter;
 
@@ -326,16 +331,22 @@ function frame(now: number) {
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 // ------------------------------------------------------------------ boot ----
-initCards();
+try {
+  initCards();
 
-// Try the html-in-canvas path once cards exist. If it works, the HUD flips to
-// the drawElement engine; otherwise we stay on css transforms. Either way the
-// cards are already interactive.
-mirror.tryEnable(cards.map((c) => c.el));
-engineLineEl.textContent = mirror.active ? engineLabel(support) : 'css transforms';
-if (support.supported && !mirror.active) {
-  // API was present but the paint probe failed — be honest about it.
-  engineLineEl.textContent = 'css transforms (drawElement present, mirror off)';
+  // Try the html-in-canvas path once cards exist. If it works, the HUD flips to
+  // the drawElement engine; otherwise we stay on css transforms. Either way the
+  // cards are already interactive.
+  mirror.tryEnable(cards.map((c) => c.el));
+  engineLineEl.textContent = mirror.active ? engineLabel(support) : 'css transforms';
+  if (support.supported && !mirror.active) {
+    // API was present but the paint probe failed — be honest about it.
+    engineLineEl.textContent = 'css transforms (drawElement present, mirror off)';
+  }
+} catch (err) {
+  // Boot must never leave a blank scene. Surface the exact failure and keep
+  // whatever cards did make it in interactive.
+  reportError(err);
 }
 
 // When the viewport changes (e.g. an orientation flip crosses a CSS breakpoint),
@@ -363,7 +374,7 @@ function resyncCardBodies() {
 }
 
 let wasPortrait = window.innerHeight >= window.innerWidth;
-window.addEventListener('resize', () => {
+function onViewportChange() {
   buildWalls();
   resyncCardBodies();
   // On an orientation flip the whole grid geometry changes, so redistribute the
@@ -374,7 +385,13 @@ window.addEventListener('resize', () => {
     layoutCards();
   }
   mirror.resize();
-});
+}
+window.addEventListener('resize', onViewportChange);
+window.addEventListener('orientationchange', onViewportChange);
+// Chrome on iOS (CriOS) changes the visible area as its bottom bar collapses
+// and fires this on a different schedule than the plain window 'resize'; listen
+// to both so the walls always match the box the cards actually live in.
+window.visualViewport?.addEventListener('resize', onViewportChange);
 
 // Shorten the HUD hint on narrow screens so it doesn't wrap awkwardly.
 const hudHint = document.getElementById('hud-hint');

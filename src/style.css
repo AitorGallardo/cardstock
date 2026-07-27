@@ -373,6 +373,32 @@ body {
   z-index: 1;
 }
 
+/* ---------- on-page error reporter ---------- */
+/* Hidden until window.onerror / unhandledrejection fires; then a single mono
+   line pinned to the bottom, tappable to dismiss. On-device diagnosis. */
+.diag-error {
+  display: none;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  padding: 8px calc(12px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom))
+    calc(12px + env(safe-area-inset-left));
+  background: rgba(24, 8, 8, 0.94);
+  border-top: 1px solid #ff6b6b;
+  color: #ff9d9d;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  word-break: break-word;
+  white-space: pre-wrap;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* Phone-sized: narrow (portrait) OR short (landscape) viewports. */
 @media (max-width: 560px), (max-height: 480px) {
   .card {
